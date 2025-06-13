@@ -1,0 +1,101 @@
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+  paths:
+    include:
+      - 'dashboard-api/**'
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  - name: NODE_VERSION
+    value: '22.x'
+  - name: APP_NAME
+    value: 'zelos-dashboard-api'
+  - name: RESOURCE_GROUP
+    value: 'zelos-$(env)-01'
+  - name: DEPLOY_ENVIRONMENTS
+    value: 'dev,test'
+
+stages:
+- stage: Build
+  displayName: 'Build and Test'
+  jobs:
+  - job: Build
+    displayName: 'Build and Test'
+    steps:
+    - task: NodeTool@0
+      inputs:
+        versionSpec: '$(NODE_VERSION)'
+      displayName: 'Install Node.js'
+
+    - script: |
+        cd dashboard-api
+        npm i
+        npm run build
+        npm run test
+      displayName: 'npm install, build and test'
+
+    - task: ArchiveFiles@2
+      inputs:
+        rootFolderOrFile: 'dashboard-api/dist'
+        includeRootFolder: false
+        archiveType: 'zip'
+        archiveFile: '$(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip'
+        replaceExistingArchive: true
+      displayName: 'Archive files'
+
+    - task: PublishBuildArtifacts@1
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+        ArtifactName: 'drop'
+        publishLocation: 'Container'
+      displayName: 'Publish artifacts'
+
+- stage: Deploy
+  displayName: 'Deploy'
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+  - deployment: DeployDev
+    displayName: 'Deploy to Dev'
+    environment: 'dev'
+    condition: |
+      and(
+        succeeded(),
+        contains(variables['DEPLOY_ENVIRONMENTS'], 'dev')
+      )
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureWebApp@1
+            inputs:
+              azureSubscription: 'azure-deploy-vizient-sandbox'
+              appName: '$(APP_NAME)-dev'
+              resourceGroupName: '$(RESOURCE_GROUP)'
+              package: '$(Pipeline.Workspace)/drop/$(Build.BuildId).zip'
+            displayName: 'Deploy to Azure App Service - Dev'
+
+  - deployment: DeployTest
+    displayName: 'Deploy to Test'
+    environment: 'test'
+    condition: |
+      and(
+        succeeded(),
+        contains(variables['DEPLOY_ENVIRONMENTS'], 'test')
+      )
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureWebApp@1
+            inputs:
+              azureSubscription: 'azure-deploy-vizient-nonprod'
+              appName: '$(APP_NAME)-test'
+              resourceGroupName: '$(RESOURCE_GROUP)'
+              package: '$(Pipeline.Workspace)/drop/$(Build.BuildId).zip'
+            displayName: 'Deploy to Azure App Service - Test'
